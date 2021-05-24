@@ -42,6 +42,7 @@ const (
 	alertmanagerConfigDir  = "/etc/alertmanager/config"
 	alertmanagerConfigFile = "alertmanager.yaml"
 	alertmanagerStorageDir = "/alertmanager"
+	sSetInputHashName      = "prometheus-operator-input-hash"
 	defaultPortName        = "web"
 )
 
@@ -50,7 +51,7 @@ var (
 	probeTimeoutSeconds int32 = 3
 )
 
-func makeStatefulSet(am *monitoringv1.Alertmanager, old *appsv1.StatefulSet, config Config) (*appsv1.StatefulSet, error) {
+func makeStatefulSet(am *monitoringv1.Alertmanager, config Config, inputHash string) (*appsv1.StatefulSet, error) {
 	// TODO(fabxc): is this the right point to inject defaults?
 	// Ideally we would do it before storing but that's currently not possible.
 	// Potentially an update handler on first insertion.
@@ -89,6 +90,7 @@ func makeStatefulSet(am *monitoringv1.Alertmanager, old *appsv1.StatefulSet, con
 			annotations[key] = value
 		}
 	}
+	annotations[sSetInputHashName] = inputHash
 	statefulset := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        prefixedName(am.Name),
@@ -143,10 +145,6 @@ func makeStatefulSet(am *monitoringv1.Alertmanager, old *appsv1.StatefulSet, con
 		statefulset.Spec.VolumeClaimTemplates = append(statefulset.Spec.VolumeClaimTemplates, *pvcTemplate)
 	}
 
-	if old != nil {
-		statefulset.Annotations = old.Annotations
-	}
-
 	statefulset.Spec.Template.Spec.Volumes = append(statefulset.Spec.Template.Spec.Volumes, am.Spec.Volumes...)
 
 	return statefulset, nil
@@ -196,7 +194,7 @@ func makeStatefulSetService(p *monitoringv1.Alertmanager, config Config) *v1.Ser
 				},
 			},
 			Selector: map[string]string{
-				"app": "alertmanager",
+				"app.kubernetes.io/name": "alertmanager",
 			},
 		},
 	}
@@ -314,9 +312,10 @@ func makeStatefulSetSpec(a *monitoringv1.Alertmanager, config Config) (*appsv1.S
 	podAnnotations := map[string]string{}
 	podLabels := map[string]string{}
 	podSelectorLabels := map[string]string{
+		// TODO(paulfantom): remove `app` label after 0.50 release
 		"app":                          "alertmanager",
 		"app.kubernetes.io/name":       "alertmanager",
-		"app.kubernetes.io/version":    amVersion,
+		"app.kubernetes.io/version":    version.String(),
 		"app.kubernetes.io/managed-by": "prometheus-operator",
 		"app.kubernetes.io/instance":   a.Name,
 		"alertmanager":                 a.Name,
@@ -336,6 +335,8 @@ func makeStatefulSetSpec(a *monitoringv1.Alertmanager, config Config) (*appsv1.S
 	for k, v := range podSelectorLabels {
 		podLabels[k] = v
 	}
+
+	podAnnotations["kubectl.kubernetes.io/default-container"] = "alertmanager"
 
 	var clusterPeerDomain string
 	if config.ClusterDomain != "" {
